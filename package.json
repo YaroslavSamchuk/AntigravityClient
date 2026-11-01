@@ -13,12 +13,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/YaroslavSamchuk/AntigravityAuth.git"
+    "url": "git+https://github.com/YaroslavSamchuk/AntigravityClient.git"
   },
   "bugs": {
-    "url": "https://github.com/YaroslavSamchuk/AntigravityAuth/issues"
+    "url": "https://github.com/YaroslavSamchuk/AntigravityClient/issues"
   },
-  "homepage": "https://github.com/YaroslavSamchuk/AntigravityAuth#readme",
+  "homepage": "https://github.com/YaroslavSamchuk/AntigravityClient#readme",
   "keywords": [
     "antigravity",
     "gemini",
