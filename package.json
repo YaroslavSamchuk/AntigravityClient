@@ -1,0 +1,42 @@
+{
+  "name": "antigravity-client",
+  "version": "1.0.0",
+  "description": "Lightweight, zero-dependency TypeScript client for Google Antigravity & Gemini authentication and AI generation",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "start": "tsx example.ts",
+    "test": "tsx example.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YaroslavSamchuk/AntigravityAuth.git"
+  },
+  "bugs": {
+    "url": "https://github.com/YaroslavSamchuk/AntigravityAuth/issues"
+  },
+  "homepage": "https://github.com/YaroslavSamchuk/AntigravityAuth#readme",
+  "keywords": [
+    "antigravity",
+    "gemini",
+    "google-auth",
+    "oauth",
+    "pkce",
+    "zero-dependency"
+  ],
+  "author": "Yaroslav Samchuk",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
