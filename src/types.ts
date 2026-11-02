@@ -54,9 +54,11 @@ export type AntigravityModel =
   | 'gemini-3.8-flash-high'
   | 'gemini-3.8-flash-medium'
   | 'gemini-3.8-flash-low'
-  | 'Claude Sonnet 4.6 (Thinking)'
-  | 'Claude Opus 4.6 (Thinking)'
-  | 'GPT-OSS 120B (Medium)'
+  | 'claude-sonnet-4-6'
+  | 'claude-opus-4-6-thinking'
+  | 'gpt-oss-120b-medium'
+  | 'gemini-2.5-flash'
+  | 'gemini-2.0-flash'
   | (string & {});
 
 export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
@@ -76,7 +78,8 @@ export interface ContentPartImageUrl {
 
 export interface ContentPartImage {
   type: 'image';
-  image: string;
+  image: string; // base64 or url
+  mimeType?: string;
 }
 
 export type ContentPart =
@@ -155,6 +158,14 @@ export interface ChatOptions {
   stream?: boolean;
   timeoutMs?: number;
   onChunk?: (chunk: string) => void;
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+  project?: string;
+  requestId?: string;
+  thinkingConfig?: {
+    includeThoughts?: boolean;
+    thinkingLevel?: 'LOW' | 'HIGH';
+  };
 }
 
 export type ChatInput = string | ChatMessage[] | ChatOptions;
@@ -180,7 +191,7 @@ export interface AntigravitySession {
   user: AntigravityUser;
   expiry: ExpiryDetails;
   subscription?: AntigravitySubscription;
-  source: 'local_gemini' | 'oauth_browser' | 'manual';
+  source: 'oauth' | 'manual' | 'storage';
   raw?: Record<string, unknown>;
 }
 
@@ -189,6 +200,7 @@ export interface AuthUrlOptions {
   state?: string;
   prompt?: 'select_account' | 'consent' | 'consent select_account';
   loginHint?: string;
+  scopes?: string[];
 }
 
 export interface AuthUrlResult {
@@ -198,30 +210,27 @@ export interface AuthUrlResult {
   redirectUri: string;
 }
 
-export interface AntigravityClientOptions {
-  token?: string;
-  accessToken?: string;
-  session?: AntigravitySession;
-  accounts?: AntigravitySession[];
-  geminiDir?: string;
-  autoOpenBrowser?: boolean;
-  port?: number;
-  clientId?: string;
-  clientSecret?: string;
-  defaultModel?: AntigravityModel;
-  binaryPath?: string;
-}
-
-export interface LoginInteractiveOptions {
-  port?: number;
-  timeoutMs?: number;
-  autoOpenBrowser?: boolean;
-  prompt?: 'select_account' | 'consent' | 'consent select_account';
-  loginHint?: string;
-}
-
 export interface ExchangeCodeOptions {
   code: string;
   codeVerifier: string;
-  redirectUri: string;
+  redirectUri?: string;
+}
+
+export interface StorageAdapter {
+  getItem(key: string): Promise<string | null> | string | null;
+  setItem(key: string, value: string): Promise<void> | void;
+  removeItem(key: string): Promise<void> | void;
+}
+
+export interface AntigravityClientOptions {
+  token?: string;
+  accessToken?: string;
+  apiKey?: string;
+  session?: AntigravitySession;
+  accounts?: AntigravitySession[];
+  storage?: StorageAdapter;
+  clientId?: string;
+  clientSecret?: string;
+  defaultModel?: AntigravityModel;
+  baseUrl?: string;
 }

@@ -1,8 +1,13 @@
-import fs from 'node:fs';
-import { LocalGeminiStore, calculateExpiry } from './local.js';
-import { GoogleOAuthFlow } from './oauth.js';
-import { AVAILABLE_MODELS, executeChat, executeChatHttp, executeStreamChat, resolveAgyBinary } from './ai.js';
-import { startOpenAIServer, type ServerOptions } from './server.js';
+import { GoogleOAuthFlow, calculateExpiry } from './auth.js';
+import {
+  ANTIGRAVITY_ENDPOINT,
+  AVAILABLE_MODELS,
+  buildAuthHeaders,
+  executeChatHttp,
+  executeStreamChatHttp,
+  runWithTools
+} from './chat.js';
+import { MemoryStorage } from './storage.js';
 import type {
   AntigravityClientOptions,
   AntigravityModel,
@@ -17,71 +22,77 @@ import type {
   ChatResponse,
   ExchangeCodeOptions,
   ExpiryDetails,
-  LoginInteractiveOptions,
   RateLimitInfo,
+  StorageAdapter,
   SubscriptionTier
 } from './types.js';
 
 export * from './types.js';
-export * from './local.js';
-export * from './oauth.js';
-export * from './ai.js';
-export * from './server.js';
-export * from './utils/jwt.js';
+export * from './auth.js';
+export * from './chat.js';
+export * from './storage.js';
+export * from './utils.js';
 
 /**
- * Universal, zero-dependency client for Google Antigravity & Gemini.
- * Includes authentication, session management, and direct AI generation APIs.
+ * Universal, zero-dependency Antigravity & Gemini AI Client.
+ * Runs seamlessly on Web Browsers (React, Next.js, Vite), Mobile (React Native / Expo),
+ * Node.js, Bun, Deno, and Edge environments.
  */
 export class Antigravity {
-  readonly localStore: LocalGeminiStore;
+  readonly storage: StorageAdapter;
   readonly oauth: GoogleOAuthFlow;
   readonly defaultModel: AntigravityModel;
-  private binaryPath: string;
+  readonly baseUrl?: string;
+
   private cachedSession: AntigravitySession | null = null;
   private accountsList: AntigravitySession[] = [];
   private activeAccountIndex: number = -1;
   private lastRateLimitInfo: RateLimitInfo = {};
+  private apiKey?: string;
 
   constructor(options?: AntigravityClientOptions) {
-    this.localStore = new LocalGeminiStore(options?.geminiDir);
+    this.storage = options?.storage || new MemoryStorage();
     this.oauth = new GoogleOAuthFlow({
       clientId: options?.clientId,
-      clientSecret: options?.clientSecret,
-      port: options?.port
+      clientSecret: options?.clientSecret
     });
     this.defaultModel = options?.defaultModel || 'gemini-3.8-flash-high';
-    this.binaryPath = resolveAgyBinary(options?.binaryPath);
+    const isBrowser = typeof window !== 'undefined' && typeof window.location?.origin === 'string';
+    this.baseUrl = options?.baseUrl ?? (isBrowser ? window.location.origin : undefined);
+    this.apiKey = options?.apiKey;
 
-    // Ініціалізація акаунтів та сесій, якщо вони передані в конструктор
+    // Load multiple accounts if passed
     if (options?.accounts && options.accounts.length > 0) {
       for (const acc of options.accounts) {
         this.addAccount(acc);
       }
     }
 
+    // Direct session or token initialization
     if (options?.session) {
       this.cachedSession = options.session;
       this.addAccount(options.session);
     } else if (options?.token || options?.accessToken) {
       const token = options.token || options.accessToken!;
       this.setToken(token);
+    } else if (options?.apiKey) {
+      this.setToken(options.apiKey);
     }
   }
 
   // ==========================================
-  // Керування акаунтами та токенами (Account & Token Management)
+  // Account & Token Management
   // ==========================================
 
   /**
-   * Повертає список усіх зареєстрованих або підключених акаунтів
+   * Returns list of all registered accounts in this client instance.
    */
   getAccounts(): AntigravitySession[] {
     return [...this.accountsList];
   }
 
   /**
-   * Додає сесію/акаунт до пулу акаунтів і робить її активною, якщо активного ще немає
+   * Adds an account/session to the pool.
    */
   addAccount(session: AntigravitySession): void {
     const existingIdx = this.accountsList.findIndex(
@@ -102,7 +113,7 @@ export class Antigravity {
   }
 
   /**
-   * Видаляє акаунт зі списку за email або id
+   * Removes an account by email or id.
    */
   removeAccount(emailOrId: string): boolean {
     const idx = this.accountsList.findIndex(
@@ -110,7 +121,10 @@ export class Antigravity {
     );
     if (idx >= 0) {
       this.accountsList.splice(idx, 1);
-      if (this.cachedSession && (this.cachedSession.user.email === emailOrId || this.cachedSession.user.id === emailOrId)) {
+      if (
+        this.cachedSession &&
+        (this.cachedSession.user.email === emailOrId || this.cachedSession.user.id === emailOrId)
+      ) {
         this.cachedSession = this.accountsList[0] || null;
         this.activeAccountIndex = this.accountsList.length > 0 ? 0 : -1;
       }
@@ -120,7 +134,7 @@ export class Antigravity {
   }
 
   /**
-   * Встановлює активний акаунт за email, id або індексом у списку
+   * Sets the active account by email, id, or index.
    */
   setActiveAccount(identifier: string | number): AntigravitySession {
     let target: AntigravitySession | undefined;
@@ -137,7 +151,7 @@ export class Antigravity {
     }
 
     if (!target) {
-      throw new Error(`Акаунт "${identifier}" не знайдено серед підключених.`);
+      throw new Error(`Account "${identifier}" not found.`);
     }
 
     this.cachedSession = target;
@@ -146,8 +160,8 @@ export class Antigravity {
   }
 
   /**
-   * Підключає клієнт напряму за токеном (ya29... або будь-яким Bearer токеном).
-   * Ідеально підходить для мобільних додатків, веб-сайтів (React, Next.js, React Native).
+   * Sets an Access Token (ya29... or API key) directly.
+   * Ideal for React, React Native, Mobile, or Serverless backends.
    */
   setToken(
     token: string,
@@ -158,16 +172,18 @@ export class Antigravity {
       expiresInSeconds?: number;
     }
   ): AntigravitySession {
+    const isApiKey = !token.startsWith('ya29.') && !token.startsWith('Bearer ') && token.length <= 60;
     const expiresAt = Date.now() + (details?.expiresInSeconds ? details.expiresInSeconds * 1000 : 3600 * 1000);
+
     const session: AntigravitySession = {
       accessToken: token,
       refreshToken: details?.refreshToken,
-      tokenType: 'Bearer',
+      tokenType: isApiKey ? 'ApiKey' : 'Bearer',
       scopes: ['https://www.googleapis.com/auth/cloud-platform'],
       user: {
-        id: details?.email || 'manual_user',
-        email: details?.email || 'user@antigravity',
-        name: details?.name || 'Authorized User'
+        id: details?.email || (isApiKey ? 'api_key_user' : 'manual_user'),
+        email: details?.email || (isApiKey ? 'api_key@antigravity' : 'user@antigravity'),
+        name: details?.name || (isApiKey ? 'API Key User' : 'Authorized User')
       },
       expiry: calculateExpiry(expiresAt),
       source: 'manual'
@@ -179,62 +195,120 @@ export class Antigravity {
   }
 
   /**
-   * Перевіряє, чи є активна валідна сесія (чи користувач авторизований)
+   * Checks whether the client currently has a valid session or token.
    */
   async isAuthenticated(): Promise<boolean> {
     try {
-      const session = await this.getSession({ autoLogin: false });
+      const session = await this.getSession({ autoRefresh: false });
       return Boolean(session && session.accessToken && !session.expiry.isExpired);
     } catch {
       return false;
     }
   }
 
+  /**
+   * Retrieves active session, auto-refreshing if expired and refresh token is available.
+   */
+  async getSession(options?: { autoRefresh?: boolean }): Promise<AntigravitySession> {
+    const autoRefresh = options?.autoRefresh !== false;
+
+    if (this.cachedSession) {
+      this.cachedSession.expiry = calculateExpiry(this.cachedSession.expiry.expiresAt);
+      if (!this.cachedSession.expiry.isExpired) {
+        return this.cachedSession;
+      }
+
+      if (autoRefresh && this.cachedSession.refreshToken) {
+        return this.refresh();
+      }
+
+      return this.cachedSession;
+    }
+
+    if (this.accountsList.length > 0 && this.activeAccountIndex >= 0) {
+      const acc = this.accountsList[this.activeAccountIndex];
+      if (acc) {
+        acc.expiry = calculateExpiry(acc.expiry.expiresAt);
+        if (!acc.expiry.isExpired) {
+          this.cachedSession = acc;
+          return acc;
+        }
+      }
+    }
+
+    // Try reading from storage
+    try {
+      const stored = await this.storage.getItem('session');
+      if (stored) {
+        const parsed = JSON.parse(stored) as AntigravitySession;
+        parsed.expiry = calculateExpiry(parsed.expiry.expiresAt);
+        if (!parsed.expiry.isExpired) {
+          this.cachedSession = parsed;
+          this.addAccount(parsed);
+          return parsed;
+        }
+        if (autoRefresh && parsed.refreshToken) {
+          this.cachedSession = parsed;
+          return this.refresh();
+        }
+      }
+    } catch {
+      // Storage read fallback
+    }
+
+    throw new Error('No active Antigravity session. Please call setToken() or authenticate via OAuth.');
+  }
+
+  /**
+   * Returns current valid Access Token or API key.
+   */
+  async getToken(): Promise<string> {
+    if (this.apiKey) return this.apiKey;
+    const session = await this.getSession();
+    return session.accessToken;
+  }
+
+  /**
+   * Returns user profile information.
+   */
+  async getUser(): Promise<AntigravityUser> {
+    const session = await this.getSession();
+    return session.user;
+  }
+
+  /**
+   * Returns token expiration details.
+   */
+  async getExpiry(): Promise<ExpiryDetails> {
+    const session = await this.getSession();
+    return session.expiry;
+  }
+
+  /**
+   * Returns ready-to-use HTTP authorization headers.
+   */
+  async getHeaders(): Promise<Record<string, string>> {
+    const token = await this.getToken();
+    return {
+      Authorization: token.startsWith('Bearer ') ? token : `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    };
+  }
+
   // ==========================================
-  // 1. Пряма генерація тексту та AI-чат (Inference)
+  // AI Inference & Chat Generation
   // ==========================================
 
   /**
-   * Повертає список моделей, доступних в Antigravity
+   * Returns list of available Gemini models.
    */
   getAvailableModels(): AntigravityModel[] {
     return [...AVAILABLE_MODELS];
   }
 
   /**
-   * Відправляє запит до моделі (Gemini або Claude).
-   * Приймає звичайний рядок, масив повідомлень messages, або об'єкт налаштувань (з tools, temperature, topP, stream тощо).
-   * 
-   * @example
-   * // 1. Простий рядок:
-   * const res = await ag.chat('Привіт!');
-   * 
-   * @example
-   * // 2. Масив повідомлень з історією:
-   * const res = await ag.chat([
-   *   { role: 'user', content: 'Мене звати Ярослав' },
-   *   { role: 'assistant', content: 'Привіт, Ярославе!' },
-   *   { role: 'user', content: 'Як мене звати?' }
-   * ]);
-   * 
-   * @example
-   * // 3. Об'єкт із повними налаштуваннями (tools, temperature, effort):
-   * const res = await ag.chat({
-   *   model: 'Claude Sonnet 4.6 (Thinking)',
-   *   temperature: 0.2,
-   *   effort: 'high',
-   *   messages: [{ role: 'user', content: 'Яка погода у Львові?' }],
-   *   tools: [weatherTool]
-   * });
-   * if (res.toolCalls) {
-   *   console.log('Модель викликає інструмент:', res.toolCalls);
-   * }
-   * 
-   * @example
-   * // 4. Стрімінг через ag.chat з опцією stream: true:
-   * for await (const chunk of ag.chat({ messages: [...], stream: true })) {
-   *   process.stdout.write(chunk);
-   * }
+   * Sends a request to the model.
+   * Accepts string prompt, ChatMessage[] history, or ChatOptions object.
    */
   chat(options: ChatOptions & { stream: true }): AsyncIterable<string>;
   chat<T = any>(options: ChatOptions & { stream?: false }): Promise<ChatResponse<T>>;
@@ -254,67 +328,40 @@ export class Antigravity {
       return this.streamChat(options);
     }
 
-    // Якщо інструменти мають метод execute — автоматично виконуємо повний цикл (Auto Tool Runner)
+    // Auto Tool Runner if any tool has an .execute method
     const hasExecutableTools = options.tools?.some((t) => typeof t.execute === 'function');
     if (hasExecutableTools) {
-      return this.runWithTools(options);
+      return (async () => {
+        const token = await this.getToken();
+        return runWithTools(token, options, this.baseUrl) as Promise<ChatResponse<T>>;
+      })();
     }
 
-    return this.executeChatUnified(options);
+    return (async () => {
+      const token = await this.getToken();
+      return executeChatHttp(token, options, this.baseUrl) as Promise<ChatResponse<T>>;
+    })();
   }
 
   /**
-   * Уніфікований метод виконання запиту:
-   * 1. Якщо на машині є бінарник agy (десктопний режим розробки) — використовує його.
-   * 2. Якщо бінарника немає (мобільні телефони, веб-браузери, серверлес) або він дав збій —
-   *    автоматично перемикається на чистий HTTPS API запит через Google OAuth Access Token!
+   * Streams chat response chunks in real-time.
    */
-  private async executeChatUnified(options: ChatOptions): Promise<ChatResponse> {
-    const hasBinary =
-      typeof process !== 'undefined' &&
-      this.binaryPath &&
-      fs.existsSync(this.binaryPath);
-
-    if (hasBinary) {
-      try {
-        return await executeChat(this.binaryPath, options);
-      } catch (err) {
-        if (await this.isAuthenticated()) {
-          const token = await this.getToken();
-          return executeChatHttp(token, options);
-        }
-        throw err;
-      }
+  async *streamChat(input: ChatInput): AsyncIterable<string> {
+    let options: ChatOptions;
+    if (typeof input === 'string') {
+      options = { prompt: input, model: this.defaultModel };
+    } else if (Array.isArray(input)) {
+      options = { messages: input, model: this.defaultModel };
+    } else {
+      options = { model: this.defaultModel, ...input };
     }
 
     const token = await this.getToken();
-    return executeChatHttp(token, options);
+    yield* executeStreamChatHttp(token, options, this.baseUrl);
   }
 
   /**
-   * Генерує строго типізований об'єкт за вказаною схемою (Structured Output).
-   * 
-   * @example
-   * interface WeatherReport {
-   *   city: string;
-   *   temperature: number;
-   *   conditions: string;
-   * }
-   * 
-   * const weather = await ag.structured<WeatherReport>({
-   *   prompt: 'Яка зараз погода в Києві?',
-   *   schema: {
-   *     type: 'object',
-   *     properties: {
-   *       city: { type: 'string' },
-   *       temperature: { type: 'number' },
-   *       conditions: { type: 'string' }
-   *     },
-   *     required: ['city', 'temperature', 'conditions']
-   *   }
-   * });
-   * 
-   * console.log(weather.city, weather.temperature);
+   * Generates strictly-typed JSON matching given schema.
    */
   async structured<T = any>(options: {
     prompt?: string;
@@ -340,222 +387,108 @@ export class Antigravity {
     try {
       return JSON.parse(res.text) as T;
     } catch {
-      throw new Error(`Не вдалося розпарсити структуровану відповідь: ${res.text}`);
+      throw new Error(`Failed to parse structured output from model: ${res.text}`);
     }
-  }
-
-  /**
-   * Автоматичний виконавець інструментів (Auto Tool Runner).
-   * Викликає execute() для всіх toolCalls паралельно, повертає результат моделі та віддає фінальну відповідь.
-   */
-  private async runWithTools(options: ChatOptions): Promise<ChatResponse> {
-    const maxSteps = options.maxSteps || 5;
-    let steps = 0;
-    const messages: ChatMessage[] = options.messages ? [...options.messages] : [];
-    if (options.prompt && messages.length === 0) {
-      messages.push({ role: 'user', content: options.prompt });
-    }
-
-    while (steps < maxSteps) {
-      steps++;
-      const res = await this.executeChatUnified({ ...options, messages });
-
-      // Якщо модель не викликала тули — повертаємо готову відповідь
-      if (!res.toolCalls || res.toolCalls.length === 0) {
-        return { ...res, steps };
-      }
-
-      // Знаходимо викликані тули, для яких є функція execute
-      const executableCalls = res.toolCalls.filter((c) => {
-        const toolDef = options.tools?.find(
-          (t) => (t.function?.name || t.name) === c.function.name
-        );
-        return typeof toolDef?.execute === 'function';
-      });
-
-      if (executableCalls.length === 0) {
-        return { ...res, steps };
-      }
-
-      // Додаємо виклик асистента до історії
-      messages.push({
-        role: 'assistant',
-        tool_calls: res.toolCalls
-      });
-
-      // Виконуємо всі тули паралельно
-      const executed = await Promise.all(
-        executableCalls.map(async (call) => {
-          const toolDef = options.tools?.find(
-            (t) => (t.function?.name || t.name) === call.function.name
-          )!;
-          let parsedArgs = {};
-          try {
-            parsedArgs =
-              typeof call.function.arguments === 'string'
-                ? JSON.parse(call.function.arguments)
-                : call.function.arguments;
-          } catch {}
-          const result = await toolDef.execute!(parsedArgs);
-          return {
-            callId: call.id,
-            name: call.function.name,
-            content: typeof result === 'string' ? result : JSON.stringify(result)
-          };
-        })
-      );
-
-      // Додаємо кожен результат з role: 'tool'
-      for (const item of executed) {
-        messages.push({
-          role: 'tool',
-          tool_call_id: item.callId,
-          name: item.name,
-          content: item.content
-        });
-      }
-    }
-
-    return this.executeChatUnified({ ...options, messages });
-  }
-
-  /**
-   * Стрімінг відповіді в реальному часі. Також підтримує рядок, масив messages або об'єкт.
-   */
-  async *streamChat(input: ChatInput): AsyncIterable<string> {
-    let options: ChatOptions;
-    if (typeof input === 'string') {
-      options = { prompt: input, model: this.defaultModel };
-    } else if (Array.isArray(input)) {
-      options = { messages: input, model: this.defaultModel };
-    } else {
-      options = { model: this.defaultModel, ...input };
-    }
-
-    yield* executeStreamChat(this.binaryPath, options);
   }
 
   // ==========================================
-  // 2. Отримання даних та поточної сесії
+  // Google OAuth Flow (Web & Mobile Friendly)
   // ==========================================
 
   /**
-   * Отримує повну активну сесію (користувач, токени, детальний статус придатності).
-   * Якщо autoLogin = false, повертає null (або викидає), не запускаючи браузер.
+   * Generates authorization URL, state, and PKCE verifier without launching anything.
    */
-  async getSession(options?: boolean | { forceRefresh?: boolean; autoLogin?: boolean }): Promise<AntigravitySession> {
-    const forceRefresh = typeof options === 'boolean' ? options : !!options?.forceRefresh;
-    const autoLogin = typeof options === 'object' && options.autoLogin !== undefined ? options.autoLogin : true;
+  async getAuthUrl(options?: AuthUrlOptions): Promise<AuthUrlResult> {
+    return this.oauth.generateAuthUrl(options);
+  }
 
-    if (!forceRefresh && this.cachedSession && !this.cachedSession.expiry.isExpired) {
-      this.cachedSession.expiry = calculateExpiry(this.cachedSession.expiry.expiresAt);
-      return this.cachedSession;
-    }
-
-    if (this.accountsList.length > 0 && this.activeAccountIndex >= 0) {
-      const acc = this.accountsList[this.activeAccountIndex];
-      if (acc && !acc.expiry.isExpired) {
-        this.cachedSession = acc;
-        return acc;
-      }
-    }
-
+  /**
+   * Exchanges an authorization code and PKCE verifier for tokens.
+   */
+  async exchangeCode(options: ExchangeCodeOptions): Promise<AntigravitySession> {
+    const session = await this.oauth.exchangeCode(options);
+    this.cachedSession = session;
+    this.addAccount(session);
     try {
-      const localSession = await this.localStore.readSession();
-      if (localSession && !localSession.expiry.isExpired) {
-        this.cachedSession = localSession;
-        this.addAccount(localSession);
-        return localSession;
-      }
-    } catch {
-      // Ігноруємо помилки читання (наприклад, у середовищах без FS)
+      await this.storage.setItem('session', JSON.stringify(session));
+    } catch {}
+    return session;
+  }
+
+  /**
+   * Generates Google OAuth URL with prompt='select_account' to force Google account chooser.
+   */
+  async switchAccount(loginHint?: string, redirectUri?: string): Promise<AuthUrlResult> {
+    return this.oauth.generateAuthUrl({
+      prompt: 'select_account',
+      loginHint,
+      redirectUri
+    });
+  }
+
+  /**
+   * Refreshes active session token.
+   */
+  async refresh(): Promise<AntigravitySession> {
+    const session = await this.getSession({ autoRefresh: false });
+    if (!session.refreshToken) {
+      throw new Error('Refresh token is missing.');
     }
 
-    if (!autoLogin) {
-      return null as any;
+    const refreshed = await this.oauth.refreshToken(session.refreshToken);
+    session.accessToken = refreshed.accessToken;
+    if (refreshed.refreshToken) session.refreshToken = refreshed.refreshToken;
+    session.expiry = calculateExpiry(refreshed.expiresAt);
+
+    this.cachedSession = session;
+    try {
+      await this.storage.setItem('session', JSON.stringify(session));
+    } catch {}
+    return session;
+  }
+
+  /**
+   * Logs out and optionally revokes the access token.
+   */
+  async logout(): Promise<void> {
+    if (this.cachedSession?.accessToken) {
+      try {
+        await fetch(`https://oauth2.googleapis.com/revoke?token=${this.cachedSession.accessToken}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        });
+      } catch {}
     }
 
-    console.log('ℹ️ Не знайдено дійсної сесії. Запуск авторизації...');
-    const newSession = await this.login();
-    this.cachedSession = newSession;
-    this.addAccount(newSession);
-    return newSession;
-  }
-
-  /**
-   * Повертає тільки рядок дійсного Access Token (ya29...).
-   */
-  async getToken(): Promise<string> {
-    const session = await this.getSession();
-    return session.accessToken;
-  }
-
-  /**
-   * Повертає профіль користувача (ім'я, email, аватар, ID, статус верифікації).
-   */
-  async getUser(): Promise<AntigravityUser> {
-    const session = await this.getSession();
-    return session.user;
-  }
-
-  /**
-   * Повертає детальний статус придатності токена (дати, хвилини, чи прострочений).
-   */
-  async getExpiry(): Promise<ExpiryDetails> {
-    const session = await this.getSession();
-    return session.expiry;
-  }
-
-  /**
-   * Повертає готові HTTP-заголовки для API запитів.
-   */
-  async getHeaders(): Promise<Record<string, string>> {
-    const token = await this.getToken();
-    return {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    };
+    this.cachedSession = null;
+    this.accountsList = [];
+    this.activeAccountIndex = -1;
+    try {
+      await this.storage.removeItem('session');
+    } catch {}
   }
 
   // ==========================================
-  // 3. Підписка, тарифи та ліміти (Subscription & Quotas)
+  // Subscription & Rate Limits
   // ==========================================
 
   /**
-   * Отримує статус підписки Antigravity / Gemini Code Assist від Google Cloud.
+   * Checks Google Cloud Code Assist / Antigravity subscription status and initializes session.
    */
   async getSubscription(): Promise<AntigravitySubscription> {
     const token = await this.getToken();
+    const base = this.baseUrl || ANTIGRAVITY_ENDPOINT;
 
     try {
-      const res = await fetch('https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist', {
+      const res = await fetch(`${base}/v1internal:loadCodeAssist`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({})
+        headers: buildAuthHeaders(token),
+        body: JSON.stringify({ metadata: { ideType: 'ANTIGRAVITY' } })
       });
 
       if (res.ok) {
-        const data = (await res.json()) as {
-          allowedTiers?: Array<{
-            id: string;
-            name: string;
-            description: string;
-            isDefault?: boolean;
-            usesGcpTos?: boolean;
-          }>;
-          ineligibleTiers?: Array<{
-            tierId: string;
-            tierName: string;
-            reasonCode: string;
-            reasonMessage: string;
-          }>;
-          [key: string]: unknown;
-        };
-
-        const allowedTiers: SubscriptionTier[] = (data.allowedTiers || []).map((t) => ({
+        const data = (await res.json()) as any;
+        const allowedTiers: SubscriptionTier[] = (data.allowedTiers || []).map((t: any) => ({
           id: t.id,
           name: t.name,
           description: t.description,
@@ -563,19 +496,24 @@ export class Antigravity {
           usesGcpTos: t.usesGcpTos
         }));
 
-        const activeTier = allowedTiers.find((t) => t.isDefault) || allowedTiers[0] || null;
+        const paidTier: SubscriptionTier | undefined = data.paidTier
+          ? {
+              id: data.paidTier.id,
+              name: data.paidTier.name,
+              description: data.paidTier.description,
+              isDefault: false
+            }
+          : undefined;
 
         return {
-          hasActiveSubscription: allowedTiers.length > 0,
-          activeTier,
+          hasActiveSubscription: Boolean(data.paidTier || allowedTiers.length > 0),
+          activeTier: paidTier || allowedTiers.find((t) => t.isDefault) || allowedTiers[0] || null,
           allowedTiers,
           ineligibleTiers: data.ineligibleTiers || [],
           raw: data
         };
       }
-    } catch {
-      // Ігноруємо помилки мережі
-    }
+    } catch {}
 
     return {
       hasActiveSubscription: false,
@@ -587,114 +525,15 @@ export class Antigravity {
   }
 
   /**
-   * Повертає актуальні дані про поточні Rate Limits.
+   * Returns rate limit information from the most recent request.
    */
   getRateLimits(): RateLimitInfo {
     return { ...this.lastRateLimitInfo };
   }
 
-  // ==========================================
-  // 4. Для Web-серверів та бекендів (Next.js, Express, Fastify)
-  // ==========================================
-
-  getAuthUrl(options?: AuthUrlOptions): AuthUrlResult {
-    return this.oauth.generateAuthUrl(options);
-  }
-
-  async exchangeCode(options: ExchangeCodeOptions): Promise<AntigravitySession> {
-    const session = await this.oauth.exchangeCode(options);
-    try {
-      await this.localStore.writeSession(session);
-    } catch {
-      // Ігноруємо помилки файлової системи (для середовищ без доступу до FS, браузерів тощо)
-    }
-    this.cachedSession = session;
-    this.addAccount(session);
-    return session;
-  }
-
-  // ==========================================
-  // 5. Для CLI та десктоп-додатків & Зміна акаунта
-  // ==========================================
-
   /**
-   * Швидка зміна акаунта: примушує Google відкрити вікно вибору облікового запису ("Виберіть акаунт").
-   * Можна передати конкретний email через loginHint, щоб одразу підставити його.
+   * Authenticated fetch helper with automated token injection and rate limit tracking.
    */
-  async switchAccount(loginHint?: string): Promise<AntigravitySession> {
-    console.log('🔄 Зміна облікового запису Antigravity...');
-    return this.login({
-      prompt: 'select_account',
-      loginHint
-    });
-  }
-
-  async login(options?: LoginInteractiveOptions): Promise<AntigravitySession> {
-    const session = await this.oauth.loginInteractive(options);
-    await this.localStore.writeSession(session);
-    this.cachedSession = session;
-    return session;
-  }
-
-  async refresh(): Promise<AntigravitySession> {
-    const session = await this.getSession();
-    if (!session.refreshToken) {
-      throw new Error('Refresh token відсутній. Потрібно пройти повторну авторизацію.');
-    }
-
-    console.log('🔄 Подовження терміну дії токена через Google OAuth...');
-    const refreshed = await this.oauth.refreshToken(session.refreshToken);
-
-    session.accessToken = refreshed.accessToken;
-    if (refreshed.refreshToken) session.refreshToken = refreshed.refreshToken;
-    session.expiry = calculateExpiry(refreshed.expiresAt);
-
-    await this.localStore.writeSession(session);
-    this.cachedSession = session;
-    return session;
-  }
-
-  async logout(): Promise<void> {
-    if (this.cachedSession?.accessToken) {
-      try {
-        await fetch(`https://oauth2.googleapis.com/revoke?token=${this.cachedSession.accessToken}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-        });
-      } catch {
-        // Ігноруємо помилки мережі
-      }
-    }
-
-    this.cachedSession = null;
-  }
-
-  async sync(): Promise<AntigravitySession | null> {
-    this.cachedSession = null;
-    return this.localStore.readSession();
-  }
-
-  async getProjects(): Promise<Record<string, string>> {
-    return this.localStore.getProjects();
-  }
-
-  async getInstallationId(): Promise<string | null> {
-    return this.localStore.getInstallationId();
-  }
-
-  // ==========================================
-  // 6. Розумний клієнт запитів & OpenAI Bridge Server
-  // ==========================================
-
-  /**
-   * Запускає локальний OpenAI-сумісний HTTP сервер на вибраному порті (за замовчуванням 3000).
-   * Дозволяє підключати офіційну бібліотеку `openai` (`new OpenAI({ baseURL, apiKey })`),
-   * Cursor, Vercel AI SDK, LangChain або будь-які готові інструменти.
-   */
-  async serve(options?: ServerOptions) {
-    return startOpenAIServer(this, options);
-  }
-
   async fetch(url: string | URL, init?: RequestInit): Promise<Response> {
     const headers = new Headers(init?.headers);
     if (!headers.has('Authorization')) {
