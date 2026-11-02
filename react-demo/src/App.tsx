@@ -1,22 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
 import { ag } from './ag.js';
-import type { AntigravityModel, AntigravityUser } from 'antigravity-client';
+import type { AntigravityModel, AntigravityUser, ChatMessage } from 'antigravity-client';
 import './App.css';
-
-interface Message {
-  role: 'user' | 'model';
-  content: string;
-}
 
 export function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [user, setUser] = useState<AntigravityUser | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Chat state
-  const [messages, setMessages] = useState<Message[]>([
+  // Chat state (сумісний з OpenAI ChatMessage[])
+  const [messages, setMessages] = useState<ChatMessage[]>([
     {
-      role: 'model',
+      role: 'assistant',
       content: 'Привіт! Я підключений до Antigravity API. Задайте будь-яке запитання.'
     }
   ]);
@@ -96,7 +91,7 @@ export function App() {
     setMessages([]);
   };
 
-  // Надсилання повідомлення (звичайний Chat без стріму)
+  // Надсилання повідомлення (звичайний Chat з історією, сумісний з OpenAI)
   const handleSendMessage = async () => {
     if (!input.trim() || isLoading) return;
 
@@ -104,18 +99,19 @@ export function App() {
     setInput('');
     setIsLoading(true);
 
-    const updated = [...messages, { role: 'user' as const, content: userText }];
+    const userMessage: ChatMessage = { role: 'user', content: userText };
+    const updated = [...messages, userMessage];
     setMessages(updated);
 
     try {
       const res = await ag.chat({
-        prompt: userText,
+        messages: updated,
         model: selectedModel
       });
 
-      setMessages([...updated, { role: 'model', content: res.text }]);
+      setMessages([...updated, { role: 'assistant', content: res.text }]);
     } catch (err: any) {
-      setMessages([...updated, { role: 'model', content: `❌ Помилка: ${err.message}` }]);
+      setMessages([...updated, { role: 'assistant', content: `❌ Помилка: ${err.message}` }]);
     } finally {
       setIsLoading(false);
     }
@@ -194,11 +190,17 @@ export function App() {
       <div className="chat-messages">
         {messages.map((msg, idx) => (
           <div key={idx} className={`message ${msg.role}`}>
-            <div>{msg.content}</div>
+            <div>
+              {typeof msg.content === 'string'
+                ? msg.content
+                : Array.isArray(msg.content)
+                ? msg.content.map((p) => (typeof p === 'string' ? p : ('text' in p ? p.text : JSON.stringify(p)))).join('\n')
+                : ''}
+            </div>
           </div>
         ))}
         {isLoading && (
-          <div className="message model">
+          <div className="message assistant">
             <div className="loading-dots">Генерація відповіді...</div>
           </div>
         )}

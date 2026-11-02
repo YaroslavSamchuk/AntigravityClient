@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Antigravity, LocalStorageAdapter } from 'antigravity-client';
+import { Antigravity, LocalStorageAdapter, type ChatMessage } from 'antigravity-client';
 
 // 1. Ініціалізація клієнта
 const ag = new Antigravity({
@@ -7,14 +7,9 @@ const ag = new Antigravity({
   baseUrl: typeof window !== 'undefined' ? window.location.origin : undefined
 });
 
-interface Message {
-  role: 'user' | 'model';
-  content: string;
-}
-
 export function AntigravityChat() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
@@ -62,7 +57,7 @@ export function AntigravityChat() {
     setMessages([]);
   };
 
-  // 5. Звичайний виклик AI Chat (без стріму)
+  // 5. Виклик AI Chat з повною підтримкою історії повідомлень та OpenAI сумісністю
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
 
@@ -70,18 +65,19 @@ export function AntigravityChat() {
     setInput('');
     setIsLoading(true);
 
-    const updated: Message[] = [...messages, { role: 'user', content: userText }];
+    const userMsg: ChatMessage = { role: 'user', content: userText };
+    const updated: ChatMessage[] = [...messages, userMsg];
     setMessages(updated);
 
     try {
       const res = await ag.chat({
-        prompt: userText,
+        messages: updated,
         model: 'gemini-3.8-flash-high' // або 'claude-sonnet-4-6', 'claude-opus-4-6-thinking'
       });
 
-      setMessages([...updated, { role: 'model', content: res.text }]);
+      setMessages([...updated, { role: 'assistant', content: res.text }]);
     } catch (err: any) {
-      setMessages([...updated, { role: 'model', content: `Помилка: ${err.message}` }]);
+      setMessages([...updated, { role: 'assistant', content: `Помилка: ${err.message}` }]);
     } finally {
       setIsLoading(false);
     }

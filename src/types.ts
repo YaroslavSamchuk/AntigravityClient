@@ -61,7 +61,7 @@ export type AntigravityModel =
   | 'gemini-2.0-flash'
   | (string & {});
 
-export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
+export type MessageRole = 'system' | 'user' | 'assistant' | 'model' | 'tool';
 
 export interface ContentPartText {
   type: 'text';
@@ -82,13 +82,41 @@ export interface ContentPartImage {
   mimeType?: string;
 }
 
+export interface ContentPartFile {
+  type: 'file';
+  file?: {
+    url?: string;
+    mimeType?: string;
+    mime_type?: string;
+    data?: string;
+  };
+  mimeType?: string;
+  data?: string;
+  url?: string;
+}
+
+export interface ContentPartDocument {
+  type: 'document';
+  source?: {
+    type?: string;
+    media_type?: string;
+    mimeType?: string;
+    data?: string;
+    url?: string;
+  };
+  mimeType?: string;
+  data?: string;
+}
+
 export type ContentPart =
   | ContentPartText
   | ContentPartImageUrl
   | ContentPartImage
+  | ContentPartFile
+  | ContentPartDocument
   | { type: string; [key: string]: any };
 
-export type MessageContent = string | ContentPart[];
+export type MessageContent = string | (ContentPart | string)[];
 
 export interface ToolDefinition {
   type?: 'function';

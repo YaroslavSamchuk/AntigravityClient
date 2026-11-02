@@ -48,6 +48,12 @@ export function extractContentText(content?: MessageContent | null): string {
           if ('image' in part && typeof part.image === 'string') {
             return `[Image Data]`;
           }
+          if ('file' in part || part.type === 'file') {
+            return `[File Data]`;
+          }
+          if ('document' in part || part.type === 'document') {
+            return `[Document Data]`;
+          }
         }
         return '';
       })
@@ -67,16 +73,28 @@ export function buildAntigravityPayload(options: ChatOptions): Record<string, an
     for (const msg of options.messages) {
       if (msg.role === 'system') continue;
 
-      const role = msg.role === 'assistant' ? 'model' : 'user';
+      const role = msg.role === 'assistant' || (msg.role as string) === 'model' ? 'model' : 'user';
       const parts: any[] = [];
 
-      // Multimodal parts handling
+      // Multimodal parts handling (OpenAI / Anthropic / Antigravity format)
       if (Array.isArray(msg.content)) {
         for (const item of msg.content) {
-          if (typeof item === 'object') {
+          if (!item) continue;
+          if (typeof item === 'string') {
+            parts.push({ text: item });
+          } else if (typeof item === 'object') {
+            // Already Google-formatted Part
+            if ('inline_data' in item || 'inlineData' in item) {
+              parts.push(item);
+              continue;
+            }
+
+            // 1. OpenAI / standard text part: { type: 'text', text: '...' }
             if ('text' in item && typeof item.text === 'string') {
               parts.push({ text: item.text });
-            } else if ('image_url' in item && item.image_url?.url) {
+            }
+            // 2. OpenAI image_url part: { type: 'image_url', image_url: { url: 'data:image/...;base64,...' } }
+            else if ('image_url' in item && item.image_url?.url) {
               const url = item.image_url.url;
               if (url.startsWith('data:')) {
                 const match = url.match(/^data:([^;]+);base64,(.+)$/);
@@ -91,16 +109,54 @@ export function buildAntigravityPayload(options: ChatOptions): Record<string, an
                 }
               }
               parts.push({ text: `[Image: ${url}]` });
-            } else if ('image' in item && typeof item.image === 'string') {
+            }
+            // 3. Direct image part: { type: 'image', image: '...', mimeType: '...' }
+            else if ('image' in item && typeof item.image === 'string') {
+              const cleanData = item.image.replace(/^data:[^;]+;base64,/, '');
               parts.push({
                 inline_data: {
                   mime_type: item.mimeType || 'image/jpeg',
-                  data: item.image.replace(/^data:[^;]+;base64,/, '')
+                  data: cleanData
                 }
               });
             }
-          } else if (typeof item === 'string') {
-            parts.push({ text: item });
+            // 4. Anthropic document part: { type: 'document', source: { data: '...', media_type: '...' } }
+            else if ('source' in item && item.source?.data) {
+              const mime = item.source.media_type || item.source.mimeType || 'application/pdf';
+              parts.push({
+                inline_data: {
+                  mime_type: mime,
+                  data: item.source.data
+                }
+              });
+            }
+            // 5. Generic file part (PDF, documents, audio, video): { type: 'file', file?: { data/url }, data?: '...' }
+            else if (item.type === 'file' || 'file' in item) {
+              const fileObj = item.file || item;
+              const fileData = fileObj.data || fileObj.url || '';
+              if (typeof fileData === 'string' && fileData.startsWith('data:')) {
+                const match = fileData.match(/^data:([^;]+);base64,(.+)$/);
+                if (match) {
+                  parts.push({
+                    inline_data: {
+                      mime_type: match[1],
+                      data: match[2]
+                    }
+                  });
+                  continue;
+                }
+              }
+              const mime = fileObj.mimeType || fileObj.mime_type || 'application/pdf';
+              const cleanData = typeof fileData === 'string' ? fileData.replace(/^data:[^;]+;base64,/, '') : '';
+              if (cleanData) {
+                parts.push({
+                  inline_data: {
+                    mime_type: mime,
+                    data: cleanData
+                  }
+                });
+              }
+            }
           }
         }
       } else if (msg.content) {
