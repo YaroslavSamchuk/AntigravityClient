@@ -18,8 +18,15 @@ export function App() {
   const [input, setInput] = useState('');
   const [selectedModel, setSelectedModel] = useState<AntigravityModel>('gemini-3.8-flash-high');
   const [isLoading, setIsLoading] = useState(false);
+  const [attachment, setAttachment] = useState<{
+    name: string;
+    type: 'image' | 'file' | 'text';
+    dataUrl?: string;
+    textContent?: string;
+  } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -91,15 +98,73 @@ export function App() {
     setMessages([]);
   };
 
+  // Вибір файлу/зображення (Multimodal)
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.type.startsWith('text/') || /\.(txt|py|js|ts|json|csv|md)$/i.test(file.name)) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        setAttachment({
+          name: file.name,
+          type: 'text',
+          textContent: reader.result as string
+        });
+      };
+      reader.readAsText(file);
+    } else {
+      const reader = new FileReader();
+      reader.onload = () => {
+        setAttachment({
+          name: file.name,
+          type: file.type.startsWith('image/') ? 'image' : 'file',
+          dataUrl: reader.result as string
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
   // Надсилання повідомлення (звичайний Chat з історією, сумісний з OpenAI)
   const handleSendMessage = async () => {
-    if (!input.trim() || isLoading) return;
+    if ((!input.trim() && !attachment) || isLoading) return;
 
     const userText = input.trim();
     setInput('');
     setIsLoading(true);
 
-    const userMessage: ChatMessage = { role: 'user', content: userText };
+    let content: any = userText;
+    if (attachment) {
+      const parts: any[] = [];
+      if (userText) parts.push({ type: 'text', text: userText });
+
+      if (attachment.type === 'text') {
+        parts.push({
+          type: 'text',
+          text: `[Файл: ${attachment.name}]\n\n${attachment.textContent}`
+        });
+      } else if (attachment.type === 'image') {
+        parts.push({
+          type: 'image_url',
+          image_url: { url: attachment.dataUrl }
+        });
+      } else {
+        parts.push({
+          type: 'file',
+          file: {
+            url: attachment.dataUrl,
+            mimeType: attachment.dataUrl?.split(';')[0]?.replace('data:', '') || 'application/pdf'
+          }
+        });
+      }
+      content = parts;
+      setAttachment(null);
+    }
+
+    const userMessage: ChatMessage = { role: 'user', content };
     const updated = [...messages, userMessage];
     setMessages(updated);
 
@@ -190,13 +255,35 @@ export function App() {
       <div className="chat-messages">
         {messages.map((msg, idx) => (
           <div key={idx} className={`message ${msg.role}`}>
-            <div>
-              {typeof msg.content === 'string'
-                ? msg.content
-                : Array.isArray(msg.content)
-                ? msg.content.map((p) => (typeof p === 'string' ? p : ('text' in p ? p.text : JSON.stringify(p)))).join('\n')
-                : ''}
-            </div>
+            {typeof msg.content === 'string' ? (
+              <div>{msg.content}</div>
+            ) : Array.isArray(msg.content) ? (
+              <div className="message-parts">
+                {msg.content.map((part, pIdx) => {
+                  if (typeof part === 'string') return <div key={pIdx}>{part}</div>;
+                  if (typeof part === 'object' && part !== null) {
+                    if ('text' in part && typeof part.text === 'string') {
+                      return <div key={pIdx}>{part.text}</div>;
+                    }
+                    if ('image_url' in part && part.image_url?.url) {
+                      return (
+                        <div key={pIdx} className="part-image">
+                          <img src={part.image_url.url} alt="Attached" />
+                        </div>
+                      );
+                    }
+                    if (part.type === 'file' || 'file' in part) {
+                      return (
+                        <div key={pIdx} className="part-file">
+                          📄 Документ прикріплено
+                        </div>
+                      );
+                    }
+                  }
+                  return null;
+                })}
+              </div>
+            ) : null}
           </div>
         ))}
         {isLoading && (
@@ -208,7 +295,34 @@ export function App() {
       </div>
 
       <div className="chat-input-area">
+        {attachment && (
+          <div className="attachment-badge">
+            <span>
+              {attachment.type === 'image' ? '🖼️' : attachment.type === 'text' ? '📝' : '📄'}{' '}
+              {attachment.name}
+            </span>
+            <button type="button" onClick={() => setAttachment(null)} title="Видалити">
+              ✕
+            </button>
+          </div>
+        )}
+
+        <input
+          type="file"
+          ref={fileInputRef}
+          style={{ display: 'none' }}
+          onChange={handleFileSelect}
+        />
+
         <div className="input-row">
+          <button
+            type="button"
+            className="btn-attach"
+            onClick={() => fileInputRef.current?.click()}
+            title="Прикріпити файл або зображення"
+          >
+            📎
+          </button>
           <textarea
             placeholder="Введіть запитання... (Enter для надсилання)"
             value={input}
@@ -222,7 +336,7 @@ export function App() {
           />
           <button
             className="btn-send"
-            disabled={!input.trim() || isLoading}
+            disabled={(!input.trim() && !attachment) || isLoading}
             onClick={handleSendMessage}
           >
             {isLoading ? '...' : 'Надіслати'}
