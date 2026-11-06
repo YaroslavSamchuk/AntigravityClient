@@ -387,12 +387,15 @@ console.log(analysis.cons);      // ["Недостатня яскравість 
 | Ідентифікатор моделі | Опис моделі |
 | :--- | :--- |
 | `gemini-3.8-flash-high` | **За замовчуванням**. Найновіша флагманська модель із глибоким міркуванням (reasoning) |
-| `claude-sonnet-4-6` | Claude Sonnet 4.6 від Anthropic через інфраструктуру Google Antigravity |
-| `claude-opus-4-6-thinking` | Claude Opus 4.6 з розширеним ланцюжком роздумів (Thinking Blocks) |
 | `gemini-3.8-flash-medium` | Швидка модель середньої потужності |
-| `gemini-3.8-flash-low` | Ультрашвидка модель для простих операцій |
+| `gemini-3.8-flash-low` | Ультрашвидка модель для швидких операцій |
+| `gemini-3.5-flash-lite` | Низька затримка та оптимізація для агентських задач і парсингу документів |
+| `gemini-3-flash` | Базова високошвидкісна модель покоління 3 (відповідь ~700 мс) |
+| `claude-sonnet-4-6` | Claude Sonnet 4.6 від Anthropic через інфраструктуру Google Antigravity (~1 сек) |
+| `claude-opus-4-6-thinking` | Claude Opus 4.6 з розширеним ланцюжком роздумів (Thinking Blocks) |
 | `gpt-oss-120b-medium` | Велика відкрита модель на 120 мільярдів параметрів |
-| `gemini-2.5-flash` | Попередня перевірена генерація Flash |
+| `gemini-2.5-flash` | Швидка модель попереднього покоління Flash |
+| `gemini-2.5-pro` | Модель 2.5 Pro з високою місткістю контексту |
 
 ### Додаткові параметри генерації:
 ```typescript

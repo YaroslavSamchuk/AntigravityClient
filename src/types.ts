@@ -54,10 +54,11 @@ export type AntigravityModel =
   | 'gemini-3.8-flash-high'
   | 'gemini-3.8-flash-medium'
   | 'gemini-3.8-flash-low'
+  | 'gemini-3.5-flash-lite'
+  | 'gemini-3-flash'
   | 'claude-sonnet-4-6'
   | 'claude-opus-4-6-thinking'
   | 'gpt-oss-120b-medium'
-  | 'gemini-3-flash'
   | 'gemini-2.5-flash'
   | 'gemini-2.5-pro'
   | (string & {});
