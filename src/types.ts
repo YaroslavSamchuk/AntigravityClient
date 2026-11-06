@@ -57,8 +57,9 @@ export type AntigravityModel =
   | 'claude-sonnet-4-6'
   | 'claude-opus-4-6-thinking'
   | 'gpt-oss-120b-medium'
+  | 'gemini-3-flash'
   | 'gemini-2.5-flash'
-  | 'gemini-2.0-flash'
+  | 'gemini-2.5-pro'
   | (string & {});
 
 export type MessageRole = 'system' | 'user' | 'assistant' | 'model' | 'tool';
