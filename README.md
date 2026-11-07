@@ -519,6 +519,41 @@ export function App() {
 }
 ```
 
+#### 🚀 Деплой на Vercel (Production Edge Proxy):
+Щоб ваш React/Vite додаток працював у браузері на продакшені у Vercel, достатньо створити безсерверний файл `api/v1internal.ts`:
+
+```typescript
+// api/v1internal.ts (Vercel Edge Proxy)
+export const config = { runtime: 'edge' };
+
+export default async function handler(req: Request) {
+  const url = new URL(req.url);
+  const target = new URL(`https://daily-cloudcode-pa.googleapis.com${url.pathname}${url.search}`);
+
+  const headers = new Headers(req.headers);
+  headers.set('User-Agent', 'antigravity/cli/1.4.12 (aidev_client; os_type=windows; arch=amd64; cl=1010700967; auth_method=consumer)');
+  headers.delete('host');
+
+  const res = await fetch(target.toString(), {
+    method: req.method,
+    headers,
+    body: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : undefined
+  });
+
+  return new Response(res.body, { status: res.status, headers: res.headers });
+}
+```
+
+І додати реврайт у `vercel.json`:
+```json
+{
+  "rewrites": [
+    { "source": "/v1internal:path*", "destination": "/api/v1internal" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
+```
+
 ---
 
 ### 2. React Native & Expo
