@@ -413,11 +413,47 @@ const res = await ag.chat({
 
 ## 💻 Готові приклади для платформ
 
+### 🌐 Вбудований проксі-сервер (В 1 команду або 1 рядок коду)
+
+Для роботи в браузері (React / Vue) бібліотека має **вбудований проксі-сервер**, який автоматично вирішує питання CORS та заголовка `User-Agent`.
+
+#### Спосіб 1: Запуск сервера через термінал (0 коду):
+```bash
+npx antigravity-server
+# або з вказанням порту:
+npx antigravity-server --port 3000
+```
+
+#### Спосіб 2: Запуск прямо з Node.js / Bun скрипта:
+```typescript
+import { Antigravity, startProxyServer } from 'antigravity-client';
+
+// Запуск у коді в 1 рядок:
+await Antigravity.startServer({ port: 3000 });
+// або: await startProxyServer({ port: 3000 });
+```
+
+#### 🔌 Як підключити у клієнті (React / Браузер):
+Просто вкажіть нову властивість **`serverUrl`** (або `proxyUrl`) при створенні клієнта:
+```typescript
+import { Antigravity } from 'antigravity-client';
+
+const ag = new Antigravity({
+  serverUrl: 'http://localhost:3000', // 👈 посилання на запущений проксі-сервер
+  token: 'ya29...' // або через ag.getAuthUrl()
+});
+
+const res = await ag.chat('Привіт!');
+console.log(res.text);
+```
+
+---
+
 ### 1. React (Vite / Next.js)
 
 > [!IMPORTANT]
 > **Чому потрібен дев-проксі у браузері?**  
-> Браузери з міркувань безпеки забороняють клієнтському JavaScript встановлювати системний заголовок `User-Agent`. Оскільки бекенд Google Antigravity вимагає фірмовий User-Agent клієнта, у браузері для локальної розробки у `vite.config.ts` налаштовується проксі:
+> Браузери з міркувань безпеки забороняють клієнтському JavaScript встановлювати системний заголовок `User-Agent`. Оскільки бекенд Google Antigravity вимагає фірмовий User-Agent клієнта, у браузері для локальної розробки у `vite.config.ts` налаштовується проксі (або використовується `npx antigravity-server` вище):
 
 ```typescript
 // vite.config.ts

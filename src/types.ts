@@ -252,6 +252,20 @@ export interface StorageAdapter {
   removeItem(key: string): Promise<void> | void;
 }
 
+export interface ProxyServerOptions {
+  port?: number;
+  host?: string;
+  verbose?: boolean;
+  targetUrl?: string;
+}
+
+export interface ProxyServerInstance {
+  port: number;
+  host: string;
+  url: string;
+  close: () => Promise<void>;
+}
+
 export interface AntigravityClientOptions {
   token?: string;
   accessToken?: string;
@@ -263,4 +277,13 @@ export interface AntigravityClientOptions {
   clientSecret?: string;
   defaultModel?: AntigravityModel;
   baseUrl?: string;
+  /**
+   * Custom server or proxy URL (e.g. 'http://localhost:3000' or 'https://my-proxy.vercel.app').
+   * All requests from this client instance will be routed through this URL.
+   */
+  serverUrl?: string;
+  /**
+   * Alias for serverUrl.
+   */
+  proxyUrl?: string;
 }

@@ -32,6 +32,10 @@ export * from './auth.js';
 export * from './chat.js';
 export * from './storage.js';
 export * from './utils.js';
+export * from './server.js';
+
+import { startProxyServer } from './server.js';
+import type { ProxyServerInstance, ProxyServerOptions } from './types.js';
 
 /**
  * Universal, zero-dependency Antigravity & Gemini AI Client.
@@ -58,7 +62,8 @@ export class Antigravity {
     });
     this.defaultModel = options?.defaultModel || 'gemini-3.8-flash-high';
     const isBrowser = typeof window !== 'undefined' && typeof window.location?.origin === 'string';
-    this.baseUrl = options?.baseUrl ?? (isBrowser ? window.location.origin : undefined);
+    const explicitUrl = options?.serverUrl || options?.proxyUrl || options?.baseUrl;
+    this.baseUrl = explicitUrl ?? (isBrowser ? window.location.origin : undefined);
     this.apiKey = options?.apiKey;
 
     // Load multiple accounts if passed
@@ -565,5 +570,25 @@ export class Antigravity {
     };
 
     return response;
+  }
+
+  /**
+   * Starts a local proxy server in 1 line of code (Node.js/Bun).
+   * Automatically handles CORS and User-Agent headers for browser clients.
+   *
+   * Example:
+   * ```typescript
+   * await Antigravity.startServer({ port: 3000 });
+   * ```
+   */
+  static async startServer(options?: ProxyServerOptions): Promise<ProxyServerInstance> {
+    return startProxyServer(options);
+  }
+
+  /**
+   * Starts a local proxy server bound to this client's configuration (Node.js/Bun).
+   */
+  async startServer(port?: number): Promise<ProxyServerInstance> {
+    return startProxyServer({ port: port || 3000 });
   }
 }
